@@ -1,101 +1,92 @@
+// api/miroir.js — Fonction serverless Vercel (Node.js CommonJS)
 
-// api/miroir.js — Vercel Serverless Function (Node.js, CommonJS)
+// Import officiel de l'API OpenAI
+const OpenAI = require('openai');
+
+// On instancie le client avec la clé définie dans Vercel → Settings → Environment Variables
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 module.exports = async (req, res) => {
+  // --- Gestion CORS ---
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  // Réponse immédiate à la pré-requête
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
   try {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed. Use POST.' });
       return;
     }
 
-    // Parse JSON body
-    let raw = '';
-    for await (const chunk of req) raw += chunk;
-    let payload = {};
-    try { payload = JSON.parse(raw || '{}'); } catch (e) {
-      res.status(400).json({ error: 'Invalid JSON body' });
+    // Récupération du body envoyé par l'app front
+    const { axes, parents, locale } = req.body;
+    if (!axes || !parents) {
+      res.status(400).json({ error: 'Missing axes or parents in request body.' });
       return;
     }
 
-    const { axes, parents, locale = 'fr' } = payload || {};
-    if (!axes || typeof axes !== 'object') {
-      res.status(400).json({ error: 'Missing \"axes\" object' });
-      return;
-    }
+    // Prépare le prompt dynamique pour GPT
+    const systemPrompt = `
+Tu es un expert du Tarot de Marseille, spécialiste de l'analyse numérologique et symbolique
+des arcanes majeurs selon la méthode des 9 positions décrites ci-dessous.
+Tu connais aussi la loi du triangle : lorsqu'une carte est obtenue par la somme de deux autres,
+elle doit être interprétée à la lumière de leurs influences combinées.
 
-    const system = `
-Tu es un analyste du "Miroir de l’Être" (Kris Hadar).
-Règle: ≤22 gardé, sinon somme des chiffres (22 = Le Mat).
-9 positions: Jour(Eau), Mois(Air), Année(Feu), Terre, Comportement intérieur, Nœud d’émotion, Comportement extérieur, Personnalité extérieure, Recherche d’harmonie.
-Loi du triangle: toute carte issue d’une somme s’interprète en fonction de ses deux parents (leur dynamique précise).
-Style FR: naturel, nuancé, sans injonction morale ni phrases génériques. Pas de jargon gratuit.
-Chaque position: 130–170 mots, structurés en:
-- Lumière
-- Ombre
-- Besoins
-- Leviers
-- Triangle (analyse concrète des deux parents; pas juste les nommer)
-Évite les formules passe-partout. Ton concret, 1–2 images parlantes max.
-`.trim();
+Règles :
+- Pas d'injonctions morales.
+- Analyse riche, nuancée, inspirante.
+- Texte fluide, pas de listes à puces sauf si nécessaire.
+- Lumière (atouts), Ombre (pièges), Besoins (ressources à nourrir), Leviers (axes d'évolution).
+- Si carte issue d'une somme, intégrer une analyse fine du triangle (influences des deux cartes sources).
+- Style en français clair, avec vocabulaire symbolique et psychologique.
+- Aucun texte générique vide de sens.
 
-    const ARCANA_META = {
-      1:{L:"élan, expérimentation, ingéniosité", O:"dispersion, esbroufe"},
-      2:{L:"savoir intérieur, mémoire, gestation", O:"inhibition, inertie"},
-      3:{L:"créativité, parole féconde, diplomatie", O:"vanité, précipitation mentale"},
-      4:{L:"structure, stabilité, autorité juste", O:"rigidité, domination"},
-      5:{L:"transmission, guidance, sens", O:"moralisme, paternalisme"},
-      6:{L:"choix, affinité, alliance", O:"indécision, dispersion"},
-      7:{L:"cap, mouvement maîtrisé, volonté", O:"tension, dirigisme"},
-      8:{L:"équité, clarté, mesure", O:"sévérité, rigidité morale"},
-      9:{L:"prudence, temps long, soin", O:"isolement, pessimisme"},
-      10:{L:"cycle, opportunité, relance", O:"instabilité, illusions de contrôle"},
-      11:{L:"apprivoisement, courage tranquille", O:"brusquerie, orgueil"},
-      12:{L:"inversion du regard, compassion", O:"sacrifice, stagnation"},
-      13:{L:"mue, épuration, renaissance", O:"radicalité, casse sèche"},
-      14:{L:"harmonie, circulation, adaptation", O:"tiédeur, évitement"},
-      15:{L:"puissance vitale, désir, créativité brute", O:"attachements, manipulation"},
-      16:{L:"libération, vérité éclat", O:"rupture mal gérée"},
-      17:{L:"grâce, inspiration, naturalité", O:"fragilité, idéalisation"},
-      18:{L:"imaginaire, intuition, mémoire", O:"peurs floues, projections"},
-      19:{L:"joie, clarté, fraternité", O:"surface parfaite, orgueil lumineux"},
-      20:{L:"réveil, appel, message", O:"bruit, attente de validation"},
-      21:{L:"accomplissement, alliance des plans", O:"zone de confort diffuse"},
-      22:{L:"quête, liberté, marche", O:"errance, imprudence"}
-    };
+Positions :
+1. Jour (Eau) : émotions, vie intérieure, caractère intime.
+2. Mois (Air) : intellection, compréhension du monde, équilibre eau/feu.
+3. Année (Feu) : perception, extérieur, manière d’agir.
+4. Terre : somme de Jour + Mois + Année, rapport au corps, au concret, personnalité profonde.
+5. Comportement intérieur : somme de Jour + Mois, comportements dans l'intimité.
+6. Nœud d’émotion : somme de Jour + Année, manière d’aimer, empreinte affective profonde.
+7. Comportement extérieur : somme de Mois + Année, comportement social.
+8. Personnalité extérieure : somme de comportements intérieur + extérieur, place dans la société.
+9. Recherche d’harmonie : équilibre entre personnalité profonde et extérieure.
 
-    const payloadForAI = { locale, axes, parents, meta: { arcana_meta: ARCANA_META } };
+Format de réponse : JSON avec 9 clés (jour, mois, annee, terre, ci, ne, ce, pe, rh),
+chacune contenant { titre, element, lumiere, ombre, besoins, leviers, triangle? }.
+`;
 
-    const rsp = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-5-thinking',
-        temperature: 0.7,
-        top_p: 0.9,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: JSON.stringify(payloadForAI) }
-        ]
-      })
+    // On construit le message utilisateur à partir des axes
+    let userPrompt = `Voici les cartes :\n`;
+    Object.keys(axes).forEach(k => {
+      userPrompt += `- ${k} : ${axes[k]}\n`;
+    });
+    userPrompt += `\nParents : ${JSON.stringify(parents, null, 2)}`;
+
+    // Appel à l'API OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // ou "gpt-4.1" si dispo sur ton compte
+      temperature: 0.9,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      response_format: { type: "json_object" }
     });
 
-    if (!rsp.ok) {
-      const text = await rsp.text();
-      res.status(500).json({ error: 'openai_error', detail: text });
-      return;
-    }
+    const json = JSON.parse(completion.choices[0].message.content);
+    res.status(200).json({ cards: json });
 
-    const data = await rsp.json();
-    const content = data?.choices?.[0]?.message?.content || '{}';
-    let out = {};
-    try { out = JSON.parse(content); } catch { out = { error: 'bad_json_from_ai', content }; }
-
-    res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate');
-    res.status(200).json(out);
-  } catch (e) {
-    res.status(500).json({ error: 'server_error', detail: String(e) });
+  } catch (error) {
+    console.error('Erreur miroir.js :', error);
+    res.status(500).json({ error: error.message });
   }
 };
