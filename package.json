@@ -1,0 +1,10 @@
+{
+  "name": "miroir-vercel-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Serverless API for Miroir de l’Être (Vercel)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}
